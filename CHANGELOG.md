@@ -1,6 +1,30 @@
 Changelog
 ====
 
+#### 1.5.3
+Release date: 2/20/19
+* Bump urllib3 version
+
+#### 1.5.2
+Release date: 1/28/19
+* Don't error on encoding errors when printing tables
+* Exit with error code when an exception is caught
+
+#### 1.5.1.1
+Release date: 12/5/18
+* Add missing cli option for dataset subfolders
+
+#### 1.5.1
+Release date: 12/5/18
+* Allow custom ca_cert files
+* Support uplodaing datasets with subfolders
+* Fix kaggle.json permissions warning
+
+#### 1.5.0
+Release date: 10/19/18
+* Update API to work with new competitions submissions backend.  This change will force old API clients to update.  
+* Update error message when config file is not found.
+
 #### 1.4.7.1
 Release date: 8/28/18
 * Fix host

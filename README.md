@@ -4,6 +4,8 @@ Official API for https://www.kaggle.com, accessible using a command line tool im
 
 Beta release - Kaggle reserves the right to modify the API functionality currently offered.
 
+IMPORTANT: Competitions submissions using an API version prior to 1.5.0 may not work.  If you are encountering difficulties with submitting to competitions, please check your version with `kaggle --version`.  If it is below 1.5.0, please update with `pip install kaggle --upgrade`.
+
 ## Installation
 
 Ensure you have Python 3 and the package manager `pip` installed.
@@ -76,20 +78,25 @@ commands:
 ##### List competitions
 
 ```
-usage: kaggle competitions list [-h] [-p PAGE] [-s SEARCH] [-v]
+usage: kaggle competitions list [-h] [--group GROUP] [--category CATEGORY] [--sort-by SORT_BY] [-p PAGE] [-s SEARCH] [-v]
 
 optional arguments:
   -h, --help            show this help message and exit
-  -p PAGE, --page PAGE  page number
+  --group GROUP         Search for competitions in a specific group. Default is 'general'. Valid options are 'general', 'entered', and 'inClass'
+  --category CATEGORY   Search for competitions of a specific category. Default is 'all'. Valid options are 'all', 'featured', 'research', 'recruitment', 'gettingStarted', 'masters', and 'playground'
+  --sort-by SORT_BY     Sort list results. Default is 'latestDeadline'. Valid options are 'grouped', 'prize', 'earliestDeadline', 'latestDeadline', 'numberOfTeams', and 'recentlyCreated'
+  -p PAGE, --page PAGE  Page number for results paging. Page size is 20 by default 
   -s SEARCH, --search SEARCH
-                        term(s) to search for
-  -v, --csv             print in CSV format
+                        Term(s) to search for
+  -v, --csv             Print results in CSV format
                         (if not set print in table format)
 ```
 
 Example: 
 
 `kaggle competitions list -s health`
+
+`kaggle competitions list --category gettingStarted`
 
 ##### List competition files
 
@@ -208,13 +215,13 @@ The API supports the following commands for Kaggle Datasets.
 
 ```
 usage: kaggle datasets [-h]
-                       {list,files,download,create,version,init,metadata} ...
+                       {list,files,download,create,version,init,metadata, status} ...
 
 optional arguments:
   -h, --help            show this help message and exit
 
 commands:
-  {list,files,download,create,version,init,metadata}
+  {list,files,download,create,version,init,metadata, status}
     list                List available datasets
     files               List dataset files
     download            Download dataset files
@@ -222,24 +229,35 @@ commands:
     version             Create a new dataset version
     init                Initialize metadata file for dataset creation
     metadata            Download metadata about a dataset
+    status              Get the creation status for a dataset
 ```
 
 ##### List datasets
 
 ```
-usage: kaggle datasets list [-h] [-p PAGE] [-s SEARCH] [-v]
+usage: kaggle datasets list [-h] [--sort-by SORT_BY] [--size SIZE] [--file-type FILE_TYPE] [--license LICENSE_NAME] [--tags TaG_IDS] [-s SEARCH] [-m] [--user USER] [-p PAGE] [-v]
 
 optional arguments:
   -h, --help            show this help message and exit
-  -p PAGE, --page PAGE  Page number for results paging
+  --sort-by SORT_BY     Sort list results. Default is 'hottest'. Valid options are 'hottest', 'votes', 'updated', and 'active'
+  --size SIZE           Search for datasets of a specific size. Default is 'all'. Valid options are 'all', 'small', 'medium', and 'large'
+  --file-type FILE_TYPE Search for datasets with a specific file type. Default is 'all'. Valid options are 'all', 'csv', 'sqlite', 'json', and 'bigQuery'. Please note that bigQuery datasets cannot be downloaded
+  --license LICENSE_NAME 
+                        Search for datasets with a specific license. Default is 'all'. Valid options are 'all', 'cc', 'gpl', 'odb', and 'other'
+  --tags TAG_IDS        Search for datasets that have specific tags. Tag list should be comma separated                      
   -s SEARCH, --search SEARCH
                         Term(s) to search for
+  -m, --mine            Display only my items
+  --user USER           Find public datasets owned by a specific user or organization
+  -p PAGE, --page PAGE  Page number for results paging. Page size is 20 by default
   -v, --csv             Print results in CSV format (if not set print in table format)
 ```
 
 Example:
 
 `kaggle datasets list -s demographics`
+
+`kaggle datasets list --sort-by votes`
 
 ##### List files for a dataset
 
@@ -302,8 +320,10 @@ Example:
 
 ##### Create a new dataset
 
+If you want to create a new dataset, you need to initiate metadata file at first. You could fulfill this by running `kaggle datasets init` as describe above.
+
 ```
-usage: kaggle datasets create [-h] [-p FOLDER] [-u] [-q] [-t]
+usage: kaggle datasets create [-h] [-p FOLDER] [-u] [-q] [-t] [-r {skip,zip,tar}]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -312,6 +332,8 @@ optional arguments:
   -u, --public          Create publicly (default is private)
   -q, --quiet           Suppress printing information about the upload/download progress
   -t, --keep-tabular    Do not convert tabular files to CSV (default is to convert)
+  -r {skip,zip,tar}, --dir-mode {skip,zip,tar}
+                        What to do with directories: "skip" - ignore; "zip" - compressed upload; "tar" - uncompressed upload
 ```
 
 Example:
@@ -322,7 +344,7 @@ Example:
 
 ```
 usage: kaggle datasets version [-h] -m VERSION_NOTES [-p FOLDER] [-q] [-t]
-                               [-d]
+                               [-r {skip,zip,tar}] [-d]
 
 required arguments:
   -m VERSION_NOTES, --message VERSION_NOTES
@@ -334,6 +356,8 @@ optional arguments:
                         Folder for upload, containing data files and a special dataset-metadata.json file (https://github.com/Kaggle/kaggle-api/wiki/Dataset-Metadata). Defaults to current working directory
   -q, --quiet           Suppress printing information about the upload/download progress
   -t, --keep-tabular    Do not convert tabular files to CSV (default is to convert)
+  -r {skip,zip,tar}, --dir-mode {skip,zip,tar}
+                        What to do with directories: "skip" - ignore; "zip" - compressed upload; "tar" - uncompressed upload
   -d, --delete-old-versions
                         Delete old versions of this dataset
 ```
@@ -397,9 +421,9 @@ commands:
 ##### List kernels
 
 ```
-usage: kaggle kernels list [-h] [-m] [-p PAGE] [-s SEARCH] [-v]
+usage: kaggle kernels list [-h] [-m] [-p PAGE] [--page-size PAGE_SIZE] [-s SEARCH] [-v]
                            [--parent PARENT] [--competition COMPETITION]
-                           [--dataset DATASET] [--parent-kernel PARENT_KERNEL]
+                           [--dataset DATASET]
                            [--user USER] [--language LANGUAGE]
                            [--kernel-type KERNEL_TYPE]
                            [--output-type OUTPUT_TYPE] [--sort-by SORT_BY]
@@ -407,7 +431,8 @@ usage: kaggle kernels list [-h] [-m] [-p PAGE] [-s SEARCH] [-v]
 optional arguments:
   -h, --help            show this help message and exit
   -m, --mine            Display only my items
-  -p PAGE, --page PAGE  Page number for results paging
+  -p PAGE, --page PAGE  Page number for results paging. Page size is 20 by default
+  --page-size PAGE_SIZE Number of items to show on a page. Default size is 20, max is 100
   -s SEARCH, --search SEARCH
                         Term(s) to search for
   -v, --csv             Print results in CSV format (if not set print in table format)
@@ -416,17 +441,19 @@ optional arguments:
                         Find kernels for a given competition
   --dataset DATASET     Find kernels for a given dataset
   --user USER           Find kernels created by a given user
-  --language LANGUAGE   Specify the language the kernel is written in.  Valid options are 'all', 'python', 'r', 'sqlite', and 'julia'
+  --language LANGUAGE   Specify the language the kernel is written in. Default is 'all'. Valid options are 'all', 'python', 'r', 'sqlite', and 'julia'
   --kernel-type KERNEL_TYPE
-                        Specify the type of kernel. Valid options are 'all', 'script', and 'notebook'
+                        Specify the type of kernel. Default is 'all'. Valid options are 'all', 'script', and 'notebook'
   --output-type OUTPUT_TYPE
-                        Search for specific kernel output types.  Valid options are 'all', 'visualizations', and 'data'
-  --sort-by SORT_BY     Sort list results. Valid options are 'hotness', 'commentCount', 'dateCreated', 'dateRun', 'relevance', 'scoreAscending', 'scoreDescending', 'viewCount', and 'voteCount'. 'relevance' is only applicable ifa search term is specified.
+                        Search for specific kernel output types. Default is 'all'. Valid options are 'all', 'visualizations', and 'data'
+  --sort-by SORT_BY     Sort list results. Default is 'hotness'.  Valid options are 'hotness', 'commentCount', 'dateCreated', 'dateRun', 'relevance', 'scoreAscending', 'scoreDescending', 'viewCount', and 'voteCount'. 'relevance' is only applicable if a search term is specified.
 ```
 
 Example:
 
 `kaggle kernels list -s titanic`
+
+`kaggle kernels list --language python`
 
 ##### Initialize metadata file for a kernel
 
@@ -531,7 +558,7 @@ usage: kaggle config path [-h] [-p PATH]
 
 optional arguments:
   -h, --help            show this help message and exit
-  -p PATH, --path PATH  folder where file(s) will be downloaded, defaults to ~/.kaggle
+  -p PATH, --path PATH  folder where file(s) will be downloaded, defaults to current working directory
 ```
 
 Example:
@@ -563,7 +590,7 @@ required arguments:
   -v VALUE, --value VALUE
                         Value of the configuration parameter, valid values depending on name
                         - competition: Competition URL suffix (use "kaggle competitions list" to show options)
-                        - path: Folder where file(s) will be downloaded, defaults to ~/.kaggle
+                        - path: Folder where file(s) will be downloaded, defaults to current working directory
                         - proxy: Proxy for HTTP requests
 ```
 

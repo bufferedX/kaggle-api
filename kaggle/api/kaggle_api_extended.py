@@ -1,6 +1,6 @@
 #!/usr/bin/python
 #
-# Copyright 2018 Kaggle Inc
+# Copyright 2019 Kaggle Inc
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,7 +24,9 @@ import os
 from os.path import expanduser
 from os.path import isfile
 import sys
+import shutil
 import zipfile
+import tempfile
 from ..api_client import ApiClient
 from kaggle.configuration import Configuration
 from .kaggle_api import KaggleApi
@@ -60,13 +62,14 @@ except NameError:
 
 
 class KaggleApi(KaggleApi):
-    __version__ = '1.4.7.1'
+    __version__ = '1.5.3'
 
     CONFIG_NAME_PROXY = 'proxy'
     CONFIG_NAME_COMPETITION = 'competition'
     CONFIG_NAME_PATH = 'path'
     CONFIG_NAME_USER = 'username'
     CONFIG_NAME_KEY = 'key'
+    CONFIG_NAME_SSL_CA_CERT = 'ssl_ca_cert'
 
     HEADER_API_VERSION = 'X-Kaggle-ApiVersion'
     DATASET_METADATA_FILE = 'dataset-metadata.json'
@@ -99,17 +102,23 @@ class KaggleApi(KaggleApi):
 
         config_data = {}
 
-        # Step 1: read in configuration file, if it exists
-        if os.path.exists(self.config):
-            config_data = self.read_config_file(config_data)
-
-        # Step 2:, get username/password from environment
+        # Step 1: try getting username/password from environment
         config_data = self.read_config_environment(config_data)
+
+        # Step 2: if credentials were not in env read in configuration file
+        if self.CONFIG_NAME_USER not in config_data \
+                or self.CONFIG_NAME_KEY not in config_data:
+            if os.path.exists(self.config):
+                config_data = self.read_config_file(config_data)
+            else:
+                raise IOError('Could not find {}. Make sure it\'s located in'
+                              ' {}. Or use the environment method.'.format(
+                                  self.config_file, self.config_dir))
 
         # Step 3: load into configuration!
         self._load_config(config_data)
 
-    def read_config_environment(self, config_data={}, quiet=False):
+    def read_config_environment(self, config_data=None, quiet=False):
         """read_config_environment is the second effort to get a username
            and key to authenticate to the Kaggle API. The environment keys
            are equivalent to the kaggle.json file, but with "KAGGLE_" prefix
@@ -123,6 +132,8 @@ class KaggleApi(KaggleApi):
 
         # Add all variables that start with KAGGLE_ to config data
 
+        if config_data is None:
+            config_data = {}
         for key, val in os.environ.items():
             if key.startswith('KAGGLE_'):
                 config_key = key.replace('KAGGLE_', '', 1).lower()
@@ -160,6 +171,12 @@ class KaggleApi(KaggleApi):
         if self.CONFIG_NAME_PROXY in config_data:
             configuration.proxy = config_data[self.CONFIG_NAME_PROXY]
 
+        # Cert File
+
+        if self.CONFIG_NAME_SSL_CA_CERT in config_data:
+            configuration.ssl_ca_cert = config_data[self.
+                                                    CONFIG_NAME_SSL_CA_CERT]
+
         # Keep config values with class instance, and load api client!
 
         self.config_values = config_data
@@ -181,7 +198,7 @@ class KaggleApi(KaggleApi):
                     'https://github.com/Kaggle/kaggle-api#api-credentials ' +
                     'for instructions.')
 
-    def read_config_file(self, config_data={}, quiet=False):
+    def read_config_file(self, config_data=None, quiet=False):
         """read_config_file is the first effort to get a username
            and key to authenticate to the Kaggle API. Since we can get the
            username and password from the environment, it's not required.
@@ -192,7 +209,8 @@ class KaggleApi(KaggleApi):
                         password, if defined
            quiet: suppress verbose print of output (default is False)
         """
-        config_data = {}
+        if config_data is None:
+            config_data = {}
 
         if os.path.exists(self.config):
 
@@ -201,11 +219,11 @@ class KaggleApi(KaggleApi):
                     permissions = os.stat(self.config).st_mode
                     if (permissions & 4) or (permissions & 32):
                         print(
-                            'Warning: Your Kaggle API key is readable by other'
-                            'users on this system! To fix this, you can run' +
+                            'Warning: Your Kaggle API key is readable by other '
+                            'users on this system! To fix this, you can run ' +
                             '\'chmod 600 {}\''.format(self.config))
 
-                with open(self.config, 'r') as f:
+                with open(self.config) as f:
                     config_data = json.load(f)
             except:
                 pass
@@ -452,18 +470,35 @@ class KaggleApi(KaggleApi):
         else:
             url_result = self.process_response(
                 self.competitions_submissions_url_with_http_info(
+                    id=competition,
                     file_name=os.path.basename(file_name),
                     content_length=os.path.getsize(file_name),
-                    last_modified_date_utc=int(
-                        os.path.getmtime(file_name) * 1000)))
-            url_result_list = url_result['createUrl'].split('/')
-            upload_result = self.process_response(
-                self.competitions_submissions_upload_with_http_info(
-                    file=file_name,
-                    guid=url_result_list[-3],
-                    content_length=url_result_list[-2],
-                    last_modified_date_utc=url_result_list[-1]))
-            upload_result_token = upload_result['token']
+                    last_modified_date_utc=int(os.path.getmtime(file_name))))
+
+            # Temporary while new worker is gradually turned on.  'isComplete'
+            # exists on the old DTO but not the new, so this is an hacky but
+            # easy solution to figure out which submission logic to use
+            if 'isComplete' in url_result:
+                # Old submissions path
+                url_result_list = url_result['createUrl'].split('/')
+                upload_result = self.process_response(
+                    self.competitions_submissions_upload_with_http_info(
+                        file=file_name,
+                        guid=url_result_list[-3],
+                        content_length=url_result_list[-2],
+                        last_modified_date_utc=url_result_list[-1]))
+                upload_result_token = upload_result['token']
+            else:
+                # New submissions path!
+                success = self.upload_complete(file_name,
+                                               url_result['createUrl'], quiet)
+                if not success:
+                    # Actual error is printed during upload_complete.  Not
+                    # ideal but changing would not be backwards compatible
+                    return "Could not submit to competition"
+
+                upload_result_token = url_result['token']
+
             submit_result = self.process_response(
                 self.competitions_submissions_submit_with_http_info(
                     id=competition,
@@ -634,7 +669,7 @@ class KaggleApi(KaggleApi):
             competition: the name of the competition
             path: a path to download the file to
             force: force the download if the file already exists (default False)
-            quiet: suppress verbose output (default is False)
+            quiet: suppress verbose output (default is True)
         """
         files = self.competition_list_files(competition)
         if not files:
@@ -686,7 +721,7 @@ class KaggleApi(KaggleApi):
             =========
             competition: the name of the competition
             path: a path to download the file to
-            quiet: suppress verbose output (default is False)
+            quiet: suppress verbose output (default is True)
         """
         response = self.process_response(
             self.competition_download_leaderboard_with_http_info(
@@ -1027,7 +1062,7 @@ class KaggleApi(KaggleApi):
             file_name: the dataset configuration file
             path: if defined, download to this location
             force: force the download if the file already exists (default False)
-            quiet: suppress verbose output (default is False)
+            quiet: suppress verbose output (default is True)
         """
         if '/' in dataset:
             self.validate_dataset_string(dataset)
@@ -1072,7 +1107,7 @@ class KaggleApi(KaggleApi):
                      should be in format [owner]/[dataset-name]
             path: the path to download the dataset to
             force: force the download if the file already exists (default False)
-            quiet: suppress verbose output (default is False)
+            quiet: suppress verbose output (default is True)
             unzip: if True, unzip files upon download (default is False)
         """
         if dataset is None:
@@ -1180,7 +1215,8 @@ class KaggleApi(KaggleApi):
                                version_notes,
                                quiet=False,
                                convert_to_csv=True,
-                               delete_old_versions=False):
+                               delete_old_versions=False,
+                               dir_mode='skip'):
         """ create a version of a dataset
 
             Parameters
@@ -1190,6 +1226,7 @@ class KaggleApi(KaggleApi):
             quiet: suppress verbose output (default is False)
             convert_to_csv: on upload, if data should be converted to csv
             delete_old_versions: if True, do that (default False)
+            dir_mode: What to do with directories: "skip" - ignore; "zip" - compress and upload
         """
         if not os.path.isdir(folder):
             raise ValueError('Invalid folder: ' + folder)
@@ -1223,7 +1260,7 @@ class KaggleApi(KaggleApi):
             convert_to_csv=convert_to_csv,
             category_ids=keywords,
             delete_old_versions=delete_old_versions)
-        self.upload_files(request, resources, folder, quiet)
+        self.upload_files(request, resources, folder, quiet, dir_mode)
 
         if id_no:
             result = DatasetNewVersionResponse(
@@ -1231,8 +1268,8 @@ class KaggleApi(KaggleApi):
                     self.datasets_create_version_by_id_with_http_info(
                         id_no, request)))
         else:
-            if ref == self.config_values[self.
-                                         CONFIG_NAME_USER] + '/INSERT_SLUG_HERE':
+            if ref == self.config_values[
+                    self.CONFIG_NAME_USER] + '/INSERT_SLUG_HERE':
                 raise ValueError(
                     'Default slug detected, please change values before '
                     'uploading')
@@ -1252,7 +1289,8 @@ class KaggleApi(KaggleApi):
                                    version_notes,
                                    quiet=False,
                                    convert_to_csv=True,
-                                   delete_old_versions=False):
+                                   delete_old_versions=False,
+                                   dir_mode='skip'):
         """ client wrapper for creating a version of a dataset
              Parameters
             ==========
@@ -1261,6 +1299,7 @@ class KaggleApi(KaggleApi):
             quiet: suppress verbose output (default is False)
             convert_to_csv: on upload, if data should be converted to csv
             delete_old_versions: if True, do that (default False)
+            dir_mode: What to do with directories: "skip" - ignore; "zip" - compress and upload
         """
         folder = folder or os.getcwd()
         result = self.dataset_create_version(
@@ -1268,7 +1307,8 @@ class KaggleApi(KaggleApi):
             version_notes,
             quiet=quiet,
             convert_to_csv=convert_to_csv,
-            delete_old_versions=delete_old_versions)
+            delete_old_versions=delete_old_versions,
+            dir_mode=dir_mode)
         if result.invalidTags:
             print(
                 ('The following are not valid tags and could not be added to '
@@ -1316,7 +1356,8 @@ class KaggleApi(KaggleApi):
                            folder,
                            public=False,
                            quiet=False,
-                           convert_to_csv=True):
+                           convert_to_csv=True,
+                           dir_mode='skip'):
         """ create a new dataset, meaning the same as creating a version but
             with extra metadata like license and user/owner.
              Parameters
@@ -1325,6 +1366,7 @@ class KaggleApi(KaggleApi):
             public: should the dataset be public?
             quiet: suppress verbose output (default is False)
             convert_to_csv: if True, convert data to comma separated value
+            dir_mode: What to do with directories: "skip" - ignore; "zip" - compress and upload
         """
         if not os.path.isdir(folder):
             raise ValueError('Invalid folder: ' + folder)
@@ -1383,7 +1425,7 @@ class KaggleApi(KaggleApi):
             convert_to_csv=convert_to_csv,
             category_ids=keywords)
         resources = meta_data.get('resources')
-        self.upload_files(request, resources, folder, quiet)
+        self.upload_files(request, resources, folder, quiet, dir_mode)
         result = DatasetNewResponse(
             self.process_response(
                 self.datasets_create_new_with_http_info(request)))
@@ -1394,7 +1436,8 @@ class KaggleApi(KaggleApi):
                                folder=None,
                                public=False,
                                quiet=False,
-                               convert_to_csv=True):
+                               convert_to_csv=True,
+                               dir_mode='skip'):
         """ client wrapper for creating a new dataset
              Parameters
             ==========
@@ -1402,9 +1445,11 @@ class KaggleApi(KaggleApi):
             public: should the dataset be public?
             quiet: suppress verbose output (default is False)
             convert_to_csv: if True, convert data to comma separated value
+            dir_mode: What to do with directories: "skip" - ignore; "zip" - compress and upload
         """
         folder = folder or os.getcwd()
-        result = self.dataset_create_new(folder, public, quiet, convert_to_csv)
+        result = self.dataset_create_new(folder, public, quiet, convert_to_csv,
+                                         dir_mode)
         if result.invalidTags:
             print('The following are not valid tags and could not be added to '
                   'the dataset: ' + str(result.invalidTags))
@@ -1425,7 +1470,7 @@ class KaggleApi(KaggleApi):
             ==========
             response: the response to download
             outfile: the output file to download to
-            quiet: suppress verbose output (default is False)
+            quiet: suppress verbose output (default is True)
             chunk_size: the size of the chunk to stream
         """
 
@@ -1789,7 +1834,7 @@ class KaggleApi(KaggleApi):
             kernel: the kernel to pull
             path: the path to pull files to on the filesystem
             metadata: if True, also pull metadata
-            quiet: suppress verbosity (default is False)
+            quiet: suppress verbosity (default is True)
         """
         existing_metadata = None
         if kernel is None:
@@ -2056,10 +2101,9 @@ class KaggleApi(KaggleApi):
                 local_date = datetime.fromtimestamp(os.path.getmtime(outfile))
                 if remote_date <= local_date:
                     if not quiet:
-                        print(
-                            os.path.basename(outfile) +
-                            ': Skipping, found more recently modified local '
-                            'copy (use --force to force download)')
+                        print(os.path.basename(outfile) +
+                              ': Skipping, found more recently modified local '
+                              'copy (use --force to force download)')
                     return False
         except:
             pass
@@ -2088,7 +2132,10 @@ class KaggleApi(KaggleApi):
         print(row_format.format(*borders))
         for i in items:
             i_fields = [self.string(getattr(i, f)) + '  ' for f in fields]
-            print(row_format.format(*i_fields))
+            try:
+                print(row_format.format(*i_fields))
+            except UnicodeEncodeError:
+                print(row_format.format(*i_fields).encode('utf-8'))
 
     def print_csv(self, items, fields):
         """ print a set of fields in a set of items using a csv.writer
@@ -2184,7 +2231,12 @@ class KaggleApi(KaggleApi):
 
         return True
 
-    def upload_files(self, request, resources, folder, quiet=False):
+    def upload_files(self,
+                     request,
+                     resources,
+                     folder,
+                     quiet=False,
+                     dir_mode='skip'):
         """ upload files in a folder
              Parameters
             ==========
@@ -2200,42 +2252,76 @@ class KaggleApi(KaggleApi):
                 continue
             full_path = os.path.join(folder, file_name)
 
-            if not quiet:
-                print('Starting upload for file ' + file_name)
             if os.path.isfile(full_path):
-                content_length = os.path.getsize(full_path)
-                token = self.dataset_upload_file(full_path, quiet)
-                if token is None:
-                    if not quiet:
-                        print('Upload unsuccessful: ' + file_name)
+                exitcode = self._upload_file(file_name, full_path, quiet,
+                                             request, resources)
+                if exitcode:
                     return
-
-                if not quiet:
-                    print('Upload successful: ' + file_name + ' (' +
-                          File.get_size(content_length) + ')')
-
-                upload_file = DatasetUploadFile()
-                upload_file.token = token
-                if resources:
-                    for item in resources:
-                        if file_name == item.get('path'):
-                            upload_file.description = item.get('description')
-                            if 'schema' in item:
-                                fields = self.get_or_default(
-                                    item['schema'], 'fields', [])
-                                processed = []
-                                count = 0
-                                for field in fields:
-                                    processed.append(
-                                        self.process_column(field))
-                                    processed[count].order = count
-                                    count += 1
-                                upload_file.columns = processed
-
-                request.files.append(upload_file)
+            elif os.path.isdir(full_path):
+                if dir_mode in ['zip', 'tar']:
+                    temp_dir = tempfile.mkdtemp()
+                    try:
+                        _, dir_name = os.path.split(full_path)
+                        archive_path = shutil.make_archive(
+                            os.path.join(temp_dir, dir_name), dir_mode,
+                            full_path)
+                        _, archive_name = os.path.split(archive_path)
+                        exitcode = self._upload_file(archive_name,
+                                                     archive_path, quiet,
+                                                     request, resources)
+                    finally:
+                        shutil.rmtree(temp_dir)
+                    if exitcode:
+                        return
+                elif not quiet:
+                    print("Skipping folder: " + file_name +
+                          "; use '--dir-mode' to upload folders")
             else:
                 if not quiet:
                     print('Skipping: ' + file_name)
+
+    def _upload_file(self, file_name, full_path, quiet, request, resources):
+        """ Helper function to upload a single file
+            Parameters
+            ==========
+            file_name: name of the file to upload
+            full_path: path to the file to upload
+            request: the prepared request
+            resources: optional file metadata
+            quiet: suppress verbose output
+            :return: True - upload unsuccessful; False - upload successful
+        """
+
+        if not quiet:
+            print('Starting upload for file ' + file_name)
+
+        content_length = os.path.getsize(full_path)
+        token = self.dataset_upload_file(full_path, quiet)
+        if token is None:
+            if not quiet:
+                print('Upload unsuccessful: ' + file_name)
+            return True
+        if not quiet:
+            print('Upload successful: ' + file_name + ' (' +
+                  File.get_size(content_length) + ')')
+        upload_file = DatasetUploadFile()
+        upload_file.token = token
+        if resources:
+            for item in resources:
+                if file_name == item.get('path'):
+                    upload_file.description = item.get('description')
+                    if 'schema' in item:
+                        fields = self.get_or_default(item['schema'], 'fields',
+                                                     [])
+                        processed = []
+                        count = 0
+                        for field in fields:
+                            processed.append(self.process_column(field))
+                            processed[count].order = count
+                            count += 1
+                        upload_file.columns = processed
+        request.files.append(upload_file)
+        return False
 
     def process_column(self, column):
         """ process a column, check for the type, and return the processed
@@ -2285,7 +2371,7 @@ class KaggleApi(KaggleApi):
                     unit_scale=True,
                     unit_divisor=1024,
                     disable=quiet) as progress_bar:
-                with open(path, 'rb', buffering=0) as fp:
+                with io.open(path, 'rb', buffering=0) as fp:
                     reader = TqdmBufferedReader(fp, progress_bar)
                     session = requests.Session()
                     retries = Retry(total=10, backoff_factor=0.5)

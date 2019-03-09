@@ -1,6 +1,6 @@
 #!/usr/bin/python
 #
-# Copyright 2018 Kaggle Inc
+# Copyright 2019 Kaggle Inc
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -46,19 +46,26 @@ def main():
     command_args.update(vars(args))
     del command_args['func']
     del command_args['command']
+    error = False
     try:
         out = args.func(**command_args)
     except ApiException as e:
         print(str(e.status) + ' - ' + e.reason)
         out = None
+        error = True
     except ValueError as e:
         print(e)
         out = None
+        error = True
     except KeyboardInterrupt:
         print('User cancelled operation')
         out = None
     if out is not None:
         print(out, end='')
+
+    # This is so that scripts that pick up on error codes can tell when there was a failure
+    if error:
+        exit(1)
 
 
 def parse_competitions(subparsers):
@@ -499,6 +506,13 @@ def parse_datasets(subparsers):
         dest='convert_to_csv',
         action='store_false',
         help=Help.param_keep_tabular)
+    parser_datasets_create_optional.add_argument(
+        '-r',
+        '--dir-mode',
+        dest='dir_mode',
+        choices=['skip', 'zip', 'tar'],
+        default='skip',
+        help=Help.param_dir_mode)
     parser_datasets_create._action_groups.append(
         parser_datasets_create_optional)
     parser_datasets_create.set_defaults(func=api.dataset_create_new_cli)
@@ -536,6 +550,13 @@ def parse_datasets(subparsers):
         dest='convert_to_csv',
         action='store_false',
         help=Help.param_keep_tabular)
+    parser_datasets_version_optional.add_argument(
+        '-r',
+        '--dir-mode',
+        dest='dir_mode',
+        choices=['skip', 'zip', 'tar'],
+        default='skip',
+        help=Help.param_dir_mode)
     parser_datasets_version_optional.add_argument(
         '-d',
         '--delete-old-versions',
@@ -934,6 +955,9 @@ class Help(object):
     param_public = 'Create publicly (default is private)'
     param_keep_tabular = (
         'Do not convert tabular files to CSV (default is to convert)')
+    param_dir_mode = (
+        'What to do with directories: "skip" - ignore; "zip" - compressed upload; "tar" - '
+        'uncompressed upload')
     param_delete_old_version = 'Delete old versions of this dataset'
     param_force = (
         'Skip check whether local version of file is up to date, force'
